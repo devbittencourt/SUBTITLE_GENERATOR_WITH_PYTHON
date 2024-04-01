@@ -1,0 +1,141 @@
+import speech_recognition as sr
+import moviepy.editor as mp
+import cv2
+import os
+import tkinter as tk
+from tkinter import filedialog
+
+
+def transcribe_audio(audio_file):
+    recognizer = sr.Recognizer()
+
+    with sr.AudioFile(audio_file) as source:
+        audio = recognizer.record(source)
+
+    try:
+        transcript = recognizer.recognize_google(audio, language='pt-BR')  # Altere o idioma conforme necessário
+        return transcript
+    except sr.UnknownValueError:
+        print("Não foi possível reconhecer a fala")
+        return ""
+    except sr.RequestError as e:
+        print("Erro ao recuperar resultados; {0}".format(e))
+        return ""
+
+
+def extract_audio(video_file):
+    video = mp.VideoFileClip(video_file)
+    audio_file = "audio.wav"
+    video.audio.write_audiofile(audio_file)
+    return audio_file
+
+
+def add_subtitles(video_file, subtitles):
+    video = cv2.VideoCapture(video_file)
+    fps = video.get(cv2.CAP_PROP_FPS)
+    frame_width = int(video.get(cv2.CAP_PROP_FRAME_WIDTH))
+    frame_height = int(video.get(cv2.CAP_PROP_FRAME_HEIGHT))
+    fourcc = cv2.VideoWriter_fourcc(*'mp4v')
+    output_video = cv2.VideoWriter("subtitled_video.mp4", fourcc, fps, (frame_width, frame_height))
+
+    font = cv2.FONT_HERSHEY_SIMPLEX
+    font_scale = 2
+    font_color = (255, 255, 255)
+    line_type = 3
+    min_chars_per_line = 20  # Número mínimo de caracteres por linha
+
+    current_frame = 0
+
+    for subtitle, subtitle_duration in subtitles:
+        # Divide o texto em várias linhas
+        lines = []
+        current_line = ""
+        for word in subtitle.split():
+            if len(current_line) + len(word) + 1 <= min_chars_per_line:
+                current_line += word + " "
+            else:
+                lines.append(current_line)
+                current_line = word + " "
+        if current_line:
+            lines.append(current_line)
+
+        num_lines = len(lines)
+
+        # Calcula a altura total ocupada pelas linhas
+        text_height = num_lines * cv2.getTextSize(subtitle, font, font_scale, line_type)[0][1]
+
+        # Calcula a posição vertical inicial para as linhas
+        text_y = (frame_height - text_height) // 2
+
+        # Adiciona as linhas da legenda ao frame e grava no vídeo de saída
+        for line in lines:
+            text_size = cv2.getTextSize(line, font, font_scale, line_type)[0]
+            text_width, _ = text_size
+
+            # Calcula a posição horizontal para centralizar a linha
+            text_x = (frame_width - text_width) // 2
+
+            for _ in range(int(subtitle_duration * fps / 10)):
+                ret, frame = video.read()
+                if not ret:
+                    break
+
+                cv2.putText(frame, line, (text_x, text_y), font, font_scale, font_color, line_type)
+
+                output_video.write(frame)
+                current_frame += 1
+
+            # Move para a próxima linha
+            text_y += text_height // num_lines
+
+    video.release()
+    output_video.release()
+
+
+def combine_audio_and_video(video_file, audio_file, output_file):
+    video = mp.VideoFileClip(video_file)
+    audio = mp.AudioFileClip(audio_file)
+
+    video = video.set_audio(audio)
+    video.write_videofile(output_file, codec='libx264')
+
+
+def select_video():
+    root = tk.Tk()
+    root.withdraw()
+    file_path = filedialog.askopenfilename(filetypes=[("Video files", "*.mp4")])
+    return file_path
+
+
+def main():
+    video_file = select_video()
+
+    if video_file:
+        audio_file = extract_audio(video_file)
+
+        # Transcreve o áudio
+        transcript = transcribe_audio(audio_file)
+
+        if transcript:
+            # Divide o texto em legendas de tamanho gerenciável
+            subtitle_duration = 5  # Duração de cada legenda em segundos
+            subtitles = [(transcript[i:i + subtitle_duration], subtitle_duration) for i in
+                         range(0, len(transcript), subtitle_duration)]
+
+            # Adiciona as legendas ao vídeo
+            add_subtitles(video_file, subtitles)
+
+            # Combina áudio e vídeo
+            output_file = "final_video.mp4"
+            combine_audio_and_video("subtitled_video.mp4", audio_file, output_file)
+
+            print("Legendas adicionadas e áudio combinado com sucesso.")
+            os.remove("subtitled_video.mp4")  # Remover vídeo intermediário
+        else:
+            print("Não foi possível transcrever o áudio.")
+    else:
+        print("Nenhum arquivo de vídeo selecionado.")
+
+
+if __name__ == "__main__":
+    main()
